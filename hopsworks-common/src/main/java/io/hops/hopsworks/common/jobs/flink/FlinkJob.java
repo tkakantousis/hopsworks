@@ -78,7 +78,7 @@ public class FlinkJob extends YarnJob {
   private final String flinkConfDir;
   private final String flinkConfFile;
   private final String flinkUser;
-  private final String JOBTYPE_STREAMING = "Streaming";
+  private final String CLUSTER_TYPE_SESSION = "Session";
 
   /**
    *
@@ -145,10 +145,12 @@ public class FlinkJob extends YarnJob {
     flinkBuilder.setFlinkLoggingConfigurationPath(new Path(
         jobconfig.getFlinkConfDir()));
 
+    
+    flinkBuilder.setJob(jobs);
     flinkBuilder.setTaskManagerMemory(jobconfig.getTaskManagerMemory());
     flinkBuilder.setTaskManagerSlots(jobconfig.getSlots());
     flinkBuilder.setTaskManagerCount(jobconfig.getNumberOfTaskManagers());
-    if (jobconfig.getFlinkjobtype().equals(JOBTYPE_STREAMING)) {
+    if (jobconfig.getFlinkjobtype().equals(CLUSTER_TYPE_SESSION)) {
       flinkBuilder.setStreamingMode(true);
     }
     flinkBuilder.setParallelism(jobconfig.getParallelism());

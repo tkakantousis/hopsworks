@@ -39,6 +39,7 @@
 
 package io.hops.hopsworks.common.jobs.flink;
 
+import io.hops.hopsworks.common.dao.jobs.description.Jobs;
 import io.hops.hopsworks.common.jobs.AsynchronousJobExecutor;
 import io.hops.hopsworks.common.hdfs.DistributedFileSystemOps;
 import io.hops.hopsworks.common.jobs.configuration.JobType;
@@ -47,9 +48,12 @@ import io.hops.hopsworks.common.jobs.yarn.ServiceProperties;
 import io.hops.hopsworks.common.jobs.yarn.YarnRunner;
 import io.hops.hopsworks.common.util.Settings;
 import java.io.File;
+
+import org.apache.flink.yarn.YarnClusterDescriptor;
 import org.apache.hadoop.fs.Path;
 
 import java.io.IOException;
+import java.net.MalformedURLException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -57,13 +61,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import org.apache.hadoop.fs.FileStatus;
-import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.yarn.api.records.LocalResource;
-import org.apache.hadoop.yarn.api.records.LocalResourceType;
-import org.apache.hadoop.yarn.api.records.LocalResourceVisibility;
+import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.yarn.client.api.YarnClient;
-import org.apache.hadoop.yarn.util.ConverterUtils;
+import org.apache.hadoop.yarn.conf.YarnConfiguration;
+import org.apache.flink.client.deployment.ClusterSpecification;
 
 /**
  * All classes in this package contain code taken from
@@ -110,6 +111,7 @@ public class FlinkYarnRunnerBuilder {
 
   //Jar paths for AM and app
   private String appJarPath;
+  private String appMainClass;
   //Optional parameters
   private final List<String> jobArgs = new ArrayList<>();
   private List<LocalResourceDTO> extraFiles = new ArrayList<>();
@@ -129,11 +131,12 @@ public class FlinkYarnRunnerBuilder {
   private Path flinkJarPath;
   private StringBuilder dynamicPropertiesEncoded;
   private boolean detached;
-  private boolean streamingMode = true;
+  private boolean clusterMode = false;
   private int parallelism;
   private String customName = null;
   private final Map<String, String> sysProps = new HashMap<>();
   private ServiceProperties serviceProps;
+  private Jobs job;
 
   public FlinkYarnRunnerBuilder(String appJarPath, String mainClass) {
     if (appJarPath == null || appJarPath.isEmpty()) {
@@ -145,10 +148,16 @@ public class FlinkYarnRunnerBuilder {
               "Name of the main class cannot be empty!");
     }
     this.appJarPath = appJarPath;
+    this.appMainClass = mainClass;
   }
 
   public FlinkYarnRunnerBuilder addAllJobArgs(String[] jobArgs) {
     this.jobArgs.addAll(Arrays.asList(jobArgs));
+    return this;
+  }
+  
+  public FlinkYarnRunnerBuilder setJob(Jobs job) {
+    this.job = job;
     return this;
   }
   
@@ -223,12 +232,14 @@ public class FlinkYarnRunnerBuilder {
     return this.taskManagerCount;
   }
 
+  
   public boolean isStreamingMode() {
-    return streamingMode;
+    return clusterMode;
   }
 
+  //TODO: Ahmad: Change to setClusterMode
   public void setStreamingMode(boolean streamingMode) {
-    this.streamingMode = streamingMode;
+    this.clusterMode = streamingMode;
   }
 
   public void setDynamicPropertiesEncoded(StringBuilder dynamicPropertiesEncoded) {
@@ -345,6 +356,8 @@ public class FlinkYarnRunnerBuilder {
    * @param flinkDir
    * @param flinkConfDir
    * @param flinkConfFile
+   * @param dfsClient
+   * @param yarnClient
    * @param certsDir
    * @param services
    * @return
@@ -357,21 +370,40 @@ public class FlinkYarnRunnerBuilder {
           YarnClient yarnClient, final String certsDir,
           AsynchronousJobExecutor services) throws IOException {
 
+    String stagingPath = File.separator + "Projects" + File.separator + project
+            + File.separator
+            + Settings.PROJECT_STAGING_DIR;
+
+    Configuration conf = services.getSettings().getConfiguration();
+    
+
     //Create the YarnRunner builder for Flink, proceed with setting values
     YarnRunner.Builder builder = new YarnRunner.Builder(Settings.FLINK_AM_MAIN);
-    YarnClusterDescriptor cluster = new YarnClusterDescriptor();
-    //TODO: Change the cluster to use files from hdfs
-    cluster.setConfigurationDirectory(flinkConfDir);
-    cluster.setConfigurationFilePath(new Path(flinkConfFile));
-    cluster.setDetachedMode(detached);
-
+    
+    //TODO: Ahmad! Check flinkConf and yarnConf initialized correctly!
     org.apache.flink.configuration.Configuration flinkConf
-            = new org.apache.flink.configuration.Configuration();
-    cluster.setFlinkConfiguration(flinkConf);
-    cluster.setJobManagerMemory(jobManagerMemoryMb);
-    cluster.setTaskManagerCount(taskManagerCount);
-    cluster.setTaskManagerMemory(taskManagerMemoryMb);
-    cluster.setTaskManagerSlots(taskManagerSlots);
+            = org.apache.flink.configuration.GlobalConfiguration.loadConfiguration(flinkConfDir);
+    YarnConfiguration yarnConf = new YarnConfiguration(conf);
+    
+    try {
+      yarnConf.addResource(new File(hadoopDir
+                + "/etc/hadoop/yarn-site.xml").toURI().toURL());
+    } catch (MalformedURLException t) {
+      throw new RuntimeException("Error", t);
+    }
+    
+    YarnClusterDescriptor cluster = new YarnClusterDescriptor(flinkConf,
+            yarnConf, flinkConfDir, yarnClient, true);
+   
+    
+    ClusterSpecification clusterSpecification = new ClusterSpecification.ClusterSpecificationBuilder()
+                 .setMasterMemoryMB(jobManagerMemoryMb)
+                 .setTaskManagerMemoryMB(taskManagerMemoryMb)
+                 .setSlotsPerTaskManager(taskManagerSlots)
+                 .setNumberTaskManagers(taskManagerCount)
+                 .createClusterSpecification();
+    
+    
     cluster.setQueue(jobManagerQueue);
     cluster.setLocalJarPath(new Path("file://" + flinkDir + "/flink.jar"));
 
@@ -379,47 +411,77 @@ public class FlinkYarnRunnerBuilder {
     builder.setDfsClient(dfsClient);
     builder.setJobUser(jobUser);
     builder.setFlinkCluster(cluster);
-    
-    String stagingPath = File.separator + "Projects" + File.separator + project
-            + File.separator
-            + Settings.PROJECT_STAGING_DIR;
+    builder.setFlinkClusterSpecification(clusterSpecification);
     builder.localResourcesBasePath(stagingPath);
     
     //Add extra files to local resources, use filename as key
     //Get filesystem
+  
     if (!extraFiles.isEmpty()) {
       if (null == dfsClient) {
         throw new YarnDeploymentException("Could not connect to filesystem");
       }
-      FileSystem fs = dfsClient.getFilesystem();
+//      FileSystem fs = dfsClient.getFilesystem();
+      List<Path> shipFiles = new ArrayList<>();
+      
       for (LocalResourceDTO dto : extraFiles) {
         String pathToResource = dto.getPath();
         pathToResource = pathToResource.replaceFirst("hdfs:/*Projects",
                 "hdfs:///Projects");
         pathToResource = pathToResource.replaceFirst("hdfs:/*user",
                 "hdfs:///user");
-        Path src = new Path(pathToResource);
-        FileStatus scFileStat = fs.getFileStatus(src);
-        LocalResource resource = LocalResource.newInstance(ConverterUtils.
-                getYarnUrlFromPath(src),
-                LocalResourceType.valueOf(dto.getType().toUpperCase()),
-                LocalResourceVisibility.valueOf(dto.getVisibility().
-                        toUpperCase()),
-                scFileStat.getLen(),
-                scFileStat.getModificationTime(),
-                dto.getPattern());
-        cluster.addHopsworksResource(dto.getName(), resource);
+//        Path src = new Path(pathToResource);
+//        FileStatus scFileStat = fs.getFileStatus(src);
+//        LocalResource resource = LocalResource.newInstance(ConverterUtils.
+//                getYarnUrlFromPath(src),
+//                LocalResourceType.valueOf(dto.getType().toUpperCase()),
+//                LocalResourceVisibility.valueOf(dto.getVisibility().
+//                        toUpperCase()),
+//                scFileStat.getLen(),
+//                scFileStat.getModificationTime(),
+//                dto.getPattern());
+        shipFiles.add(new Path(pathToResource));
+        LOGGER.log(Level.INFO, "FLINK: Shipping file {0}", pathToResource);
+//        cluster.addHopsworksResource(dto.getName(), resource);
       }
+      builder.addFlinkShipFiles(shipFiles);
+        
+      LOGGER.log(Level.INFO, "FLINK: Done adding all ship files!");
     }
-    addSystemProperty(Settings.HOPSWORKS_REST_ENDPOINT_PROPERTY, serviceProps.getRestEndpoint());
-    addSystemProperty(Settings.HOPSWORKS_PROJECTID_PROPERTY, Integer.toString(serviceProps.getProjectId()));
 
+    List<File> flinkLib = Arrays.asList(new File(flinkDir+"/lib/").listFiles());
+    
+    // only for debugging
+    // StringBuilder b = new StringBuilder();
+    // flinkLib.forEach(b::append);
+    // LOGGER.log(Level.INFO, "FLINK: Adding Flink lib to ship! {0}", b);
+
+    cluster.addShipFiles(flinkLib);
+    addSystemProperty(Settings.HOPSWORKS_REST_ENDPOINT_PROPERTY, serviceProps.getRestEndpoint());
+    dynamicPropertiesEncoded = new StringBuilder();
+  
+    
+    dynamicPropertiesEncoded.append("env.java.opts").append("=").append("\"-D" + Settings.LOGSTASH_JOB_INFO).append("=")
+      .append(project.toLowerCase() + "," + job.getName() + "," + job.getId() + "," + YarnRunner.APPID_PLACEHOLDER +
+        "\"")
+      .append("@@");
+    dynamicPropertiesEncoded.append(Settings.LOGSTASH_JOB_INFO).append("=").append(project.toLowerCase() +
+      "," + job.getName() + "," + job.getId() + "," + YarnRunner.APPID_PLACEHOLDER).append("@@");
+    //dynamicPropertiesEncoded.append("log4j.configuration").append("=").append(CONFIG_FILE_LOG4J_NAME).append("@@");
+    dynamicPropertiesEncoded.append("state.checkpoints.dir").append("=").append(
+      "hdfs:///Projects/" +project + "/Resources/flink/").append("@@");
+    dynamicPropertiesEncoded.append("log4j.configuration").append("=").append(
+      "/srv/hops/flink/conf/log4j.properties").append("@@");
+    dynamicPropertiesEncoded.append("log4j.properties").append("=").append(
+      "/srv/hops/flink/conf/log4j.properties").append("@@");
     if (!sysProps.isEmpty()) {
-      dynamicPropertiesEncoded = new StringBuilder();
+      // TODO: Ahmad: But we have a public void setDynamicPropertiesEncoded()! Why overwrite it here without checking?
+     
       for (String s : sysProps.keySet()) {
         String option = YarnRunner.escapeForShell("-D" + s + "=" + sysProps.get(s));
         builder.addJavaOption(option);
-        cluster.addHopsworksParam(option);
+        //TODO: Ahmad: Check
+        // cluster.addHopsworksParam(option);
         dynamicPropertiesEncoded.append(s).append("=").append(sysProps.get(s)).
                 append("@@");
       }
@@ -429,17 +491,23 @@ public class FlinkYarnRunnerBuilder {
        * https://github.com/apache/flink/blob/b410c393c960f55c09fadd4f22732d06f801b938/
        * flink-yarn/src/main/java/org/apache/flink/yarn/cli/FlinkYarnSessionCli.java
        */
-      if (dynamicPropertiesEncoded.length() > 0) {
-        cluster.setDynamicPropertiesEncoded(dynamicPropertiesEncoded.
-                substring(0,
-                        dynamicPropertiesEncoded.
-                                lastIndexOf("@@")));
-      }
+     
+    }
+    
+    
+    if (dynamicPropertiesEncoded.length() > 0) {
+      cluster.setDynamicPropertiesEncoded(dynamicPropertiesEncoded.
+        substring(0,
+          dynamicPropertiesEncoded.
+            lastIndexOf("@@")));
     }
 
     builder.setJobType(JobType.FLINK);
     builder.setAppJarPath(appJarPath);
+    builder.setAppMainClass(appMainClass);
     builder.setParallelism(parallelism);
+    builder.setDetached(detached);
+    builder.setClusterMode(clusterMode);
 
     String name;
     if (customName == null) {
@@ -452,6 +520,7 @@ public class FlinkYarnRunnerBuilder {
     }
     cluster.setName(name);
     //Set up command
+    // TODO: Ahmad: rename builder.amArgs to builder.jobArgs??
     StringBuilder amargs = new StringBuilder("");
     //Pass job arguments
     for (String s : jobArgs) {

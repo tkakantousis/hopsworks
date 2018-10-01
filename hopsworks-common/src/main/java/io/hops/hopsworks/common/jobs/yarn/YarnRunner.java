@@ -44,15 +44,40 @@ import io.hops.hopsworks.common.hdfs.DistributedFileSystemOps;
 import io.hops.hopsworks.common.hdfs.DistributedFsService;
 import io.hops.hopsworks.common.hdfs.Utils;
 import io.hops.hopsworks.common.jobs.AsynchronousJobExecutor;
-import io.hops.hopsworks.common.jobs.flink.YarnClusterClient;
-import io.hops.hopsworks.common.jobs.flink.YarnClusterDescriptor;
 import io.hops.hopsworks.common.jobs.configuration.JobType;
 import io.hops.hopsworks.common.util.HopsUtils;
 import io.hops.hopsworks.common.util.IoUtils;
 import io.hops.hopsworks.common.util.Settings;
+import java.io.File;
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.net.URL;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.ListIterator;
+import java.util.Map;
+import java.util.Map.Entry;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
 import io.hops.hopsworks.common.yarn.YarnClientService;
+import java.util.LinkedList;
+import org.apache.flink.client.deployment.ClusterDeploymentException;
+import org.apache.flink.client.deployment.ClusterSpecification;
 import org.apache.flink.client.program.PackagedProgram;
 import org.apache.flink.client.program.ProgramInvocationException;
+import org.apache.flink.runtime.jobgraph.JobGraph;
+import org.apache.flink.client.program.PackagedProgramUtils;
+
+import org.apache.flink.client.program.ClusterClient;
+
+
+import org.apache.flink.yarn.YarnClusterDescriptor;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
@@ -73,23 +98,7 @@ import org.apache.hadoop.yarn.conf.YarnConfiguration;
 import org.apache.hadoop.yarn.exceptions.YarnException;
 import org.apache.hadoop.yarn.util.ConverterUtils;
 import org.codehaus.plexus.util.FileUtils;
-
-import java.io.File;
-import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.net.URI;
-import java.net.URISyntaxException;
-import java.net.URL;
-import java.nio.file.Files;
-import java.nio.file.Paths;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.ListIterator;
-import java.util.Map;
-import java.util.Map.Entry;
-import java.util.logging.Level;
-import java.util.logging.Logger;
+import org.apache.flink.runtime.leaderretrieval.LeaderRetrievalException;
 
 /**d
  * <p>
@@ -106,8 +115,13 @@ public class YarnRunner {
   private JobType jobType;
   //The parallelism parameter of Flink
   private int parallelism;
+  private boolean detached;
+  private boolean clusterMode;
   private YarnClusterDescriptor flinkCluster;
+  private ClusterSpecification flinkClusterSpecification;
   private String appJarPath;
+  private final List<Path> flinkShipFiles;
+  private String appMainClass;
   private final String amJarLocalName;
   private final String amJarPath;
   private final String amQueue;
@@ -129,7 +143,6 @@ public class YarnRunner {
   private final AsynchronousJobExecutor services;
   private DistributedFileSystemOps dfsClient;
   private YarnClient yarnClient;
-  private String jobUser;
   
   private boolean readyToSubmit = false;
   private ApplicationSubmissionContext appContext;
@@ -168,6 +181,8 @@ public class YarnRunner {
       return s;
     }
   }
+  
+ 
 
   /**
    * This method is only used by Spark family jobs. Flink jobs copy their
@@ -279,71 +294,273 @@ public class YarnRunner {
       yarnClient.submitApplication(appContext);
 
     } else if (jobType == JobType.FLINK) {
-      // Objects needed for materializing user certificates
-      flinkCluster.setCertsObjects(services, project, username, javaOptions);
-
-      YarnClusterClient client = flinkCluster.deploy();
-      appId = client.getApplicationId();
-
-      fillInAppid(appId.toString());
+      logger.log(Level.INFO,
+          "FLINK: YarnRunner got a Flink Job!");
+     
+      
       String[] args = {};
-      if (amArgs != null) {
-        if (!javaOptions.isEmpty()) {
-          amArgs += " --kafka_params \"";
-          for (String s : javaOptions) {
-            amArgs += s + ",";
-          }
-          amArgs = amArgs.substring(0, amArgs.length() - 1);
-          amArgs += "\"";
-        }
+// TODO: Ahmad: is this needed???
+//      if (amArgs != null) {
+//        if (!javaOptions.isEmpty()) {
+//          amArgs += " --kafka_params \"";
+//          for (String s : javaOptions) {
+//            amArgs += s + ",";
+//          }
+//          amArgs = amArgs.substring(0, amArgs.length() - 1);
+//          amArgs += "\"";
+//        }
+//        args = amArgs.trim().split(" ");
+//      }
+
+// TODO: Ahmad: amArgs is actually the user defined job args
+      if(amArgs != null) {
         args = amArgs.trim().split(" ");
       }
-
-      /*
-       * Copy the appjar to the localOS as it is needed by the Flink client
-       * Create path in local /tmp to store the appjar
-       * To distinguish between jars for different job executions, add the
-       * current system time in the filename. This jar is removed after
-       * the job is finished.
-       */
-      String localPathAppJarDir = "/tmp/" + appJarPath.substring(appJarPath.
-          indexOf("Projects"), appJarPath.lastIndexOf("/")) + "/" + appId;
-      String appJarName = appJarPath.substring(appJarPath.lastIndexOf("/")).
-          replace("/", "");
-      File tmpDir = new File(localPathAppJarDir);
-      if (!tmpDir.exists()) {
-        tmpDir.mkdir();
-      }
-      //Copy job jar locaclly so that Flink client has access to it 
-      //in YarnRunner
-      FileSystem fs = FileSystem.get(conf);
-      fs.copyToLocalFile(new Path(appJarPath), new Path(localPathAppJarDir + "/"
-          + appJarName));
-      //app.jar path 
-      File file = new File(localPathAppJarDir + "/" + appJarName);
+      //logger.log(Level.INFO, "FLINK: amArgs = ", amArgs); 
+      
+        
+      String localPathAppJarDir = null;
       try {
+        // TODO: Ahmad: Check what needs to be in the classpath for flink client
+        // Now we add everything!
+        
         List<URL> classpaths = new ArrayList<>();
-        //Copy Flink jar to local machine and pass it to the classpath
+        
+        URL otherURL = new File("/srv/hops/hadoop").toURI().toURL();
+        classpaths.add(otherURL); 
+        otherURL = new File("/srv/hops/hadoop/lib").toURI().toURL();
+        classpaths.add(otherURL); 
+        otherURL = new File("/srv/hops/hadoop/lib/native").toURI().toURL();
+        classpaths.add(otherURL); 
+        // According to https://issues.apache.org/jira/browse/BEAM-2457
+        // we need to have the hadoop conf dir both in classpath and as environment variable!
+        otherURL = new File("/srv/hops/hadoop/etc/hadoop").toURI().toURL();
+        classpaths.add(otherURL); 
+        
+        // Hadoop
+        File[] hadoopCommon = new File("/srv/hops/hadoop/share/hadoop/common").listFiles();
+        for(File f: hadoopCommon){
+          URL u = f.toURI().toURL();
+          classpaths.add(u);
+          //logger.log(Level.INFO, "FLINK: Adding to class path: {0} ", u);
+        }
+
+        File[] hadoopLibs = new File("/srv/hops/hadoop/share/hadoop/common/lib").listFiles();
+        for(File f: hadoopLibs){
+          URL u = f.toURI().toURL();
+          classpaths.add(u);
+          //logger.log(Level.INFO, "FLINK: Adding to class path: {0} ", u);
+        }
+        
+        File[] otherLibs = new File("/srv/hops/hadoop/share/hadoop/yarn/").listFiles();
+        for(File f: otherLibs){
+          URL u = f.toURI().toURL();
+          classpaths.add(u);
+          //logger.log(Level.INFO, "FLINK: Adding to class path: {0} ", u);
+        }
+        
+        otherLibs = new File("/srv/hops/hadoop/share/hadoop/yarn/lib").listFiles();
+        for(File f: otherLibs){
+          URL u = f.toURI().toURL();
+          classpaths.add(u);
+          //logger.log(Level.INFO, "FLINK: Adding to class path: {0} ", u);
+        }
+        
+        otherLibs = new File("/srv/hops/hadoop/share/hadoop/tools/lib").listFiles();
+        for(File f: otherLibs){
+          URL u = f.toURI().toURL();
+          classpaths.add(u);
+          //logger.log(Level.INFO, "FLINK: Adding to class path: {0} ", u);
+        }
+
+        otherLibs = new File("/srv/hops/hadoop/share/hadoop/mapreduce").listFiles();
+        for(File f: otherLibs){
+          URL u = f.toURI().toURL();
+          classpaths.add(u);
+          //logger.log(Level.INFO, "FLINK: Adding to class path: {0} ", u);
+        }
+
+        otherLibs = new File("/srv/hops/hadoop/share/hadoop/mapreduce/lib").listFiles();
+        for(File f: otherLibs){
+          URL u = f.toURI().toURL();
+          classpaths.add(u);
+          //logger.log(Level.INFO, "FLINK: Adding to class path: {0} ", u);
+        }
+
+        //HDFS
+        File[] hdfsLibs = new File("/srv/hops/hadoop/share/hadoop/hdfs").listFiles();
+        for(File f: hdfsLibs){
+          URL u = f.toURI().toURL();
+          classpaths.add(u);
+          //logger.log(Level.INFO, "FLINK: Adding to class path: {0} ", u);
+        }
+
+        hdfsLibs = new File("/srv/hops/hadoop/share/hadoop/hdfs/lib").listFiles();
+        for(File f: hdfsLibs){
+          URL u = f.toURI().toURL();
+          classpaths.add(u);
+          //logger.log(Level.INFO, "FLINK: Adding to class path: {0} ", u);
+        }
+                
+        // Flink
         URL flinkURL = new File(serviceDir + "/"
             + Settings.FLINK_LOCRSC_FLINK_JAR).toURI().toURL();
         classpaths.add(flinkURL);
-        PackagedProgram program = new PackagedProgram(file, classpaths, args);
-        client.run(program, parallelism);
+
+        File[] flinkLibs = new File(serviceDir + "/lib").listFiles();
+        for(File f: flinkLibs){
+          URL u = f.toURI().toURL();
+          classpaths.add(u);
+          //logger.log(Level.INFO, "FLINK: Adding to class path: {0} ", u);
+        }
+
+        
+        // create yarn app
+        YarnClientApplication yarnApplication = yarnClient.createApplication();
+        GetNewApplicationResponse appResponse = yarnApplication.getNewApplicationResponse();
+        
+        // and pass it to flink
+        flinkCluster.setYarnApplication(yarnApplication);
+        flinkCluster.setAppResponse(appResponse);
+        
+        appId = appResponse.getApplicationId();
+        fillInAppid(appId.toString());
+        logger.log(Level.INFO,"FLINK: Created YarnApplication with appId = {0},", appId.toString());
+        // Set the staging dir
+        flinkCluster.setStagingDir(new Path(localResourcesBasePath));
+        
+        
+        /*
+        * Copy the appjar to the localOS as it is needed by the Flink client
+        * Create path in local /tmp to store the appjar
+        * To distinguish between jars for different job executions, add the
+        * current system time in the filename. This jar is removed after
+        * the job is finished.
+        */
+        localPathAppJarDir = "/tmp/" + appJarPath.substring(appJarPath.
+            indexOf("Projects"), appJarPath.lastIndexOf("/")) + "/" + appId;
+        String appJarName = appJarPath.substring(appJarPath.lastIndexOf("/")).
+            replace("/", "");
+        File tmpDir = new File(localPathAppJarDir);
+        if (!tmpDir.exists()) {
+          tmpDir.mkdir();
+        }
+        
+        FileSystem fs = FileSystem.get(conf);
+        
+        String localAppJarPath = localPathAppJarDir + "/" + appJarName;
+        logger.log(Level.INFO, "FLINK: Copying App Jar file {0} to {1}", new Object[] {appJarPath, localAppJarPath});
+        fs.copyToLocalFile(new Path(appJarPath), new Path(localAppJarPath));
+        //app.jar path
+        File localAppJarFile = new File(localAppJarPath);
+
+        
+        // Copying user shipFiles from HDFS to local
+        // then adding local copy to 1) FlinkClient classpath and 2) ClusterDescriptor ship files
+        List<File> localShipFiles = new LinkedList<>();
+        for(Path shipFile : flinkShipFiles) {
+          String localPath = localPathAppJarDir + "/" + shipFile.getName();
+          logger.log(Level.INFO, "FLINK: Copying user file {0} to {1}", new Object[] {shipFile, localPath});
+          fs.copyToLocalFile(shipFile, new Path(localPath));
+          File localFile = new File(localPath);
+          // 1) add to class path
+          classpaths.add(localFile.toURI().toURL());
+          // 2) add to ShipFiles
+          localShipFiles.add(localFile);
+        }
+        // Flink will ship the files
+        flinkCluster.addShipFiles(localShipFiles);
+        
+        
+        // Generating the Flink Job Graph
+        // TODO: Ahmad: Debugging! Remove after setting env properly
+        Map<String, String> env = System.getenv();
+        for (Map.Entry<String, String> entry : env.entrySet()) {
+          logger.log(Level.INFO, "FLINK: env {0} = {1}", new Object[]{entry.getKey(), entry.getValue()});
+        }
+
+        logger.log(Level.INFO, "FLINK: Packaging the Flink program...");
+        PackagedProgram packagedProgram = new PackagedProgram(localAppJarFile, classpaths, appMainClass, args);
+        JobGraph jobGraph = PackagedProgramUtils.createJobGraph(packagedProgram,
+                flinkCluster.getFlinkConfiguration(), parallelism);
+
+                
+        Map<String, String> jobSystemProperties = new HashMap<>(3);
+        // When Hops RPC TLS is enabled, Yarn will take care of application certificate
+        // Certificates are materialized locally so DFSClient can be set to null
+        // LocalResources are not used by Flink, so set it null
+        if (!services.getSettings().getHopsRpcTls()) {
+          logger.log(Level.INFO, "FLINK: HopsUtils is copying project user certs...");
+          HopsUtils.copyProjectUserCerts(project, username,
+                  services.getSettings().getHopsworksTmpCertDir(),
+                  services.getSettings().getHdfsTmpCertDir(), JobType.FLINK,
+                  null, null, jobSystemProperties,
+                  services.getSettings().getFlinkKafkaCertDir(),
+                  appResponse.getApplicationId().toString(),
+                  services.getCertificateMaterializer(), services.getSettings().getHopsRpcTls());
+        }
+        
+        ClusterClient<ApplicationId> clusterClient;
+        if(!clusterMode) {
+          logger.log(Level.INFO, "FLINK: Attempting to deploy a job cluster..");
+          clusterClient = 
+                  flinkCluster.deployJobCluster(flinkClusterSpecification, jobGraph, detached);
+        } else {
+          logger.log(Level.INFO, "FLINK: Attempting to deploy a session cluster..");
+          clusterClient = 
+                  flinkCluster.deploySessionCluster(flinkClusterSpecification);
+          clusterClient.setDetached(detached);
+          clusterClient.submitJob(jobGraph, java.lang.ClassLoader.getSystemClassLoader());
+          logger.log(Level.INFO, "FLINK: Web interface URL: {0}", clusterClient.getWebInterfaceURL());
+          logger.log(Level.INFO, "FLINK: ClusterConnectionInfo address: {0}",
+                  clusterClient.getClusterConnectionInfo().getAddress());
+          logger.log(Level.INFO, "FLINK: ClusterConnectionInfo hostname: {0}",
+                  clusterClient.getClusterConnectionInfo().getHostname());
+          logger.log(Level.INFO, "FLINK: ClusterConnectionInfo port: {0}",
+                  clusterClient.getClusterConnectionInfo().getPort());
+//          if (detached) {
+//            logger.log(Level.INFO, "FLINK: .. in detached mode");
+//            clusterClient.runDetached(jobGraph, java.lang.ClassLoader.getSystemClassLoader());
+//          } else {
+//            clusterClient.run(jobGraph, java.lang.ClassLoader.getSystemClassLoader());
+//            logger.log(Level.INFO, "FLINK: .. in attached mode");
+//
+//          }
+        }
+        
+               
+        appId = clusterClient.getClusterId();
+        logger.log(Level.INFO, "FLINK: Finished deploying cluster with ID {0}", appId.toString());
+        
+        //monitor = new YarnMonitor(appId, newYarnClientWrapper, ycs);
+ 
+        
       } catch (ProgramInvocationException ex) {
-        logger.log(Level.WARNING, "Error while submitting Flink job to cluster",
+        logger.log(Level.INFO, "FLINK: Error ProgramInvocationException while submitting Flink job to cluster ",
             ex);
         //Kill the flink job here
         Runtime rt = Runtime.getRuntime();
         rt.exec(services.getSettings().getHadoopSymbolicLinkDir() + "/bin/yarn application -kill " + appId.toString());
-        throw new IOException("Error while submitting Flink job to cluster:"+ex.getMessage());
+        throw new IOException("FLINK: Error while submitting Flink job to cluster,"
+                + " ProgramInvocationException : " + ex.getMessage());
+      } catch (ClusterDeploymentException ex) {
+          // TODO: Ahmad handle this exception
+        logger.log(Level.INFO, "FLINK: Error ClusterDeploymentException while submitting Flink job to cluster ", ex);
+        throw new IOException("FLINK: Error while submitting Flink job to cluster,"
+                + " ClusterDeploymentException : " + ex.getMessage());
+      } catch (LeaderRetrievalException ex) {
+        Logger.getLogger(YarnRunner.class.getName())
+                .log(Level.WARNING, "Flink: Could not get ClusterConnectionInfo", ex);
       } finally {
         //Remove local flink app jar
-        FileUtils.deleteDirectory(localPathAppJarDir);
+        if(localPathAppJarDir != null) {
+          FileUtils.deleteDirectory(localPathAppJarDir);
+        }
         flinkCluster = null;
         appId = null;
         appContext = null;
         //Try to delete any local certificates for this project
-        logger.log(Level.INFO, "Deleting local flink app jar:{0}", appJarPath);
+        logger.log(Level.INFO, "FLINK: Deleting local flink app jar:{0}", appJarPath);
       }
 
     }
@@ -400,6 +617,11 @@ public class YarnRunner {
     //Loop through files to remove
     for (ListIterator<String> i = filesToRemove.listIterator(); i.hasNext();) {
       i.set(i.next().replace(APPID_PLACEHOLDER, id));
+    }
+    
+    if(jobType == JobType.FLINK){
+      flinkCluster.setDynamicPropertiesEncoded(flinkCluster.getDynamicPropertiesEncoded().replace(APPID_PLACEHOLDER,
+        id));
     }
   }
 
@@ -636,8 +858,13 @@ public class YarnRunner {
     this.amJarPath = builder.amJarPath;
     this.jobType = builder.jobType;
     this.parallelism = builder.parallelism;
+    this.detached = builder.detached;
+    this.clusterMode = builder.clusterMode;
     this.flinkCluster = builder.flinkCluster;
+    this.flinkClusterSpecification = builder.flinkClusterSpecification;
     this.appJarPath = builder.appJarPath;
+    this.flinkShipFiles = builder.flinkShipFiles;
+    this.appMainClass = builder.appMainClass;
     this.amQueue = builder.amQueue;
     this.amMemory = builder.amMemory;
     this.amVCores = builder.amVCores;
@@ -650,7 +877,6 @@ public class YarnRunner {
     this.localResourcesBasePath = builder.localResourcesBasePath;
     this.yarnClient = builder.yarnClient;
     this.dfsClient = builder.dfsClient;
-    this.jobUser = builder.jobUser;
     this.conf = builder.conf;
     this.shouldCopyAmJarToLocalResources
         = builder.shouldAddAmJarToLocalResources;
@@ -698,8 +924,11 @@ public class YarnRunner {
     private JobType jobType;
     //Flink parallelism
     private int parallelism;
+    private boolean detached;
+    private boolean clusterMode;
     private YarnClusterDescriptor flinkCluster;
     private String appJarPath;
+    private String appMainClass;
     //Optional attributes
     // Queue for App master
     private String amQueue = "default"; //TODO(Theofilos): enable changing this, or infer from user data
@@ -731,6 +960,7 @@ public class YarnRunner {
     private List<String> javaOptions = new ArrayList<>();
     //List of files to be removed after starting AM.
     private List<String> filesToRemove = new ArrayList<>();
+    private List<Path> flinkShipFiles = new LinkedList<>();
 
     //Hadoop Configuration
     private Configuration conf;
@@ -741,6 +971,7 @@ public class YarnRunner {
     
     private String serviceDir;
     private AsynchronousJobExecutor services;
+    private ClusterSpecification flinkClusterSpecification;
     
     //Constructors
     public Builder(String amMainClass) {
@@ -855,13 +1086,45 @@ public class YarnRunner {
     public void setParallelism(int parallelism) {
       this.parallelism = parallelism;
     }
+    
+    /**
+     * Set Flink detached property.
+     *
+     * @param detached
+     */
+    public void setDetached(boolean detached) {
+      this.detached = detached;
+    }
+    
+    public void setClusterMode(boolean clusterMode) {
+      this.clusterMode = clusterMode;
+    }
 
     public void setFlinkCluster(YarnClusterDescriptor flinkCluster) {
       this.flinkCluster = flinkCluster;
     }
     
+    public void setFlinkClusterSpecification(ClusterSpecification flinkClusterSpecification) {
+      this.flinkClusterSpecification = flinkClusterSpecification;
+    }
+    
+    /**
+   * Adds the given HDFS files to the list of files to ship.
+   * Files will be copied to local temp dir and shipped by Flink
+   * The local files will also be added to Flink Client classpath to generate Job Graph
+   *
+   * @param shipFiles files to ship
+   */
+    public void addFlinkShipFiles(List<Path> shipFiles) {
+      this.flinkShipFiles.addAll(shipFiles);
+    }
+
     public void setAppJarPath(String path) {
       this.appJarPath = path;
+    }
+    
+    public void setAppMainClass(String appMainClass) {
+      this.appMainClass = appMainClass;
     }
 
     /**
@@ -1010,9 +1273,6 @@ public class YarnRunner {
         this.services = services;
         conf = services.getSettings().getConfiguration();
         this.serviceDir = serviceDir;
-        if (jobType == JobType.FLINK) {
-          flinkCluster.setConf(conf);
-        }
       } catch (IllegalStateException e) {
         throw new IllegalStateException("Failed to load configuration", e);
       }
@@ -1037,6 +1297,8 @@ public class YarnRunner {
       }
       return new YarnRunner(this);
     }
+
+
 
   }
 
