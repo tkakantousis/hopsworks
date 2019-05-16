@@ -844,8 +844,12 @@ angular.module('hopsWorksApp')
                                   getDirContents();
                                   growl.success(success.data.successMessage, {title: 'Moved successfully. Opened dest dir: ' + relPath, ttl: 2000});
                                 }, function (error) {
-                                  growl.error(error.data.errorMsg, {title: name + ' was not moved', ttl: 5000});
-                        });
+                                    if (typeof error.data.usrMsg !== 'undefined') {
+                                        growl.error(error.data.usrMsg, {title: error.data.errorMsg, ttl: 5000});
+                                    } else {
+                                        growl.error("", {title: error.data.errorMsg, ttl: 5000});
+                                    }
+                                });
                       }, function (error) {
               });
 
@@ -893,8 +897,12 @@ angular.module('hopsWorksApp')
                                         self.all_selected = false;
                                       }
                                     }, function (error) {
-                                        growl.error(error.data.errorMsg, {title: name + ' was not moved', ttl: 5000});
-                                        errorCode = error.data.code;
+                                        if (typeof error.data.usrMsg !== 'undefined') {
+                                            growl.error(error.data.usrMsg, {title: error.data.errorMsg, ttl: 5000});
+                                        } else {
+                                            growl.error("", {title: error.data.errorMsg, ttl: 5000});
+                                        }
+                                    errorCode = error.data.code;
                             });
                             if (errorCode === 110045) {
                               break;

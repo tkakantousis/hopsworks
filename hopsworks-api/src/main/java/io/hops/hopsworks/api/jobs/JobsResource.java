@@ -284,7 +284,9 @@ public class JobsResource {
       required = true)  @QueryParam("path") String path,
     @Context HttpServletRequest req) throws JobException {
     Users user = jWTHelper.getUserPrincipal(req);
-    JobConfiguration config = jobController.inspectProgram(path, project, user, jobtype);
+    JobConfiguration config =
+      jobController.inspectProgram("/" + Settings.DIR_ROOT + "/" + project.getName() + "/" + path
+      , project, user, jobtype);
     return Response.ok().entity(config).build();
   }
   
