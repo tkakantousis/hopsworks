@@ -286,7 +286,7 @@ public class JobsResource {
     @Context HttpServletRequest req) throws JobException {
     Users user = jWTHelper.getUserPrincipal(req);
     JobConfiguration config =
-      jobController.inspectProgram(Utils.getHdfsRootPath(path), project, user, jobtype);
+      jobController.inspectProgram(Utils.getHdfsRootPath(project.getName()) + path, project, user, jobtype);
     return Response.ok().entity(config).build();
   }
   
