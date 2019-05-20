@@ -172,7 +172,6 @@ public class JobController {
   public JobConfiguration inspectProgram(String path, Project project, Users user, JobType jobType)
           throws JobException {
     DistributedFileSystemOps udfso = null;
-    path = Utils.getHdfsRootPath(project.getName()) + path;
     try {
       String username = hdfsUsersBean.getHdfsUserName(project, user);
       udfso = dfs.getDfsOps(username);
