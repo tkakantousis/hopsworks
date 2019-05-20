@@ -19,9 +19,9 @@
  */
 angular.module('hopsWorksApp')
     .controller('createNewTrainingDatasetVersionCtrl', ['$uibModalInstance', 'FeaturestoreService',
-        'growl', 'projectId', 'featurestore', 'ModalService', 'jobs', '$scope', 'trainingDatasets', 'trainingDataset',
+        'growl', 'projectId', 'featurestore', 'ModalService', 'jobs', 'UtilsService', '$scope', 'trainingDatasets', 'trainingDataset',
         function ($uibModalInstance, FeaturestoreService, growl, projectId, featurestore,
-                  ModalService, jobs, $scope, trainingDatasets, trainingDataset) {
+                  ModalService, jobs, UtilsService, $scope, trainingDatasets, trainingDataset) {
             /**
              * Initialize state
              */

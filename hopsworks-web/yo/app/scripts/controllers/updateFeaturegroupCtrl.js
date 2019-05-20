@@ -19,8 +19,8 @@
  */
 angular.module('hopsWorksApp')
     .controller('updateFeaturegroupCtrl', ['$uibModalInstance', 'FeaturestoreService',
-        'growl', 'projectId', 'featuregroup', 'featurestore', 'jobs', 'featuregroups', '$scope', 'ModalService',
-        function ($uibModalInstance, FeaturestoreService, growl, projectId, featuregroup, featurestore, jobs, featuregroups, $scope, ModalService) {
+        'growl', 'projectId', 'featuregroup', 'featurestore', 'jobs', 'UtilsService', 'featuregroups', '$scope', 'ModalService',
+        function ($uibModalInstance, FeaturestoreService, growl, projectId, featuregroup, featurestore, jobs, UtilsService, featuregroups, $scope, ModalService) {
             /**
              * Initialize controller state
              */
