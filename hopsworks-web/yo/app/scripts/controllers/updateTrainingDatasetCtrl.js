@@ -182,7 +182,8 @@ angular.module('hopsWorksApp')
             self.selectDataDependency = function (index) {
                 ModalService.selectFile('lg', '*', '', true).then(
                     function (success) {
-                        self.dependencies[index] = success
+                        var projectName = UtilsService.getProjectName();
+                        self.dependencies[index] = "/Projects/" + projectName + "/" + success;
                     },
                     function (error) {
                         // Users changed their minds.
