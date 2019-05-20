@@ -81,7 +81,7 @@ describe "On #{ENV['OS']}" do
         expect(json_body[:count]).to eq 3
       end
       it "should inspect spark app jar and get configuration" do
-        get "#{ENV['HOPSWORKS_API']}/project/#{@project[:id]}/jobs/spark/inspection?path=TestJob/spark-examples.jar"
+        get "#{ENV['HOPSWORKS_API']}/project/#{@project[:id]}/jobs/spark/inspection?path=/Projects/#{@project[:projectname]}/TestJob/spark-examples.jar"
         expect_status(200)
         expect(json_body[:type]).to eq("sparkJobConfiguration")
       end
