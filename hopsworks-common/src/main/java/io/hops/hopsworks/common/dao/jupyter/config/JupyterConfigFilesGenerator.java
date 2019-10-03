@@ -221,7 +221,7 @@ public class JupyterConfigFilesGenerator {
         "api_key", apiKey,
         "flink_conf_dir", String.valueOf(settings.getFlinkConfDir()),
         "requests_verify", String.valueOf(settings.getRequestsVerify()),
-        "domain_ca_truststore_pem", settings.getSparkConfDir() + File.separator + Settings.DOMAIN_CA_TRUSTSTORE_PEM
+        "domain_ca_keystore_pem", settings.getSparkConfDir() + File.separator + Settings.DOMAIN_CA_KEYSTORE_PEM
       ).toString();
   }
   

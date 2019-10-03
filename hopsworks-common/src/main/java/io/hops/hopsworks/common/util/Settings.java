@@ -1828,8 +1828,7 @@ public class Settings implements Serializable {
   public static final String CERT_PASS_SUFFIX = "__cert.key";
   public static final String K_CERTIFICATE = "k_certificate";
   public static final String T_CERTIFICATE = "t_certificate";
-  private static final String CA_TRUSTSTORE_NAME = "cacerts.jks";
-  public static final String DOMAIN_CA_TRUSTSTORE_PEM = "cacerts.pem";
+  public static final String DOMAIN_CA_KEYSTORE_PEM = "keystore.pem";
   public static final String DOMAIN_CA_TRUSTSTORE = "cacerts.jks";
   //Glassfish truststore, used by hopsutil to initialize https connection to Hopsworks
   public static final String CRYPTO_MATERIAL_PASSWORD = "material_passwd";
@@ -1904,11 +1903,11 @@ public class Settings implements Serializable {
   }
 
   public String getGlassfishTrustStoreHdfs() {
-    return "hdfs:///user/" + getSparkUser() + "/" + CA_TRUSTSTORE_NAME;
+    return "hdfs:///user/" + getSparkUser() + "/" + DOMAIN_CA_TRUSTSTORE;
   }
   
   public String getGlassfishTrustStore() {
-    return getHopsworksDomainDir() + File.separator + "config" + File.separator + CA_TRUSTSTORE_NAME;
+    return getHopsworksDomainDir() + File.separator + "config" + File.separator + DOMAIN_CA_TRUSTSTORE;
   }
   //Dataset request subject
   public static final String MESSAGE_DS_REQ_SUBJECT = "Dataset access request.";

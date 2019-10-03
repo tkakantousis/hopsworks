@@ -155,8 +155,8 @@ public class SparkConfigurationUtil extends ConfigurationUtil {
       HopsUtils.IGNORE);
     addToSparkEnvironment(sparkProps, "REQUESTS_VERIFY", String.valueOf(settings.getRequestsVerify()),
       HopsUtils.IGNORE);
-    addToSparkEnvironment(sparkProps, "DOMAIN_CA_TRUSTSTORE_PEM",
-      settings.getSparkConfDir() + File.separator + Settings.DOMAIN_CA_TRUSTSTORE_PEM, HopsUtils.IGNORE);
+    addToSparkEnvironment(sparkProps, "DOMAIN_CA_KEYSTORE_PEM",
+      settings.getSparkConfDir() + File.separator + Settings.DOMAIN_CA_KEYSTORE_PEM, HopsUtils.IGNORE);
   
     //If DynamicExecutors are not enabled, set the user defined number
     //of executors
